@@ -42,6 +42,7 @@ try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
     from apex.parallel import convert_syncbn_model
+
     has_apex = True
 except ImportError:
     has_apex = False
@@ -55,18 +56,19 @@ except AttributeError:
 
 try:
     import wandb
+
     has_wandb = True
 except ImportError:
     has_wandb = False
 
 try:
     from functorch.compile import memory_efficient_fusion
+
     has_functorch = True
 except ImportError as e:
     has_functorch = False
 
 has_compile = hasattr(torch, 'compile')
-
 
 _logger = logging.getLogger('train')
 
@@ -75,7 +77,6 @@ _logger = logging.getLogger('train')
 config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
 parser.add_argument('-c', '--config', default='', type=str, metavar='FILE',
                     help='YAML config file specifying default arguments')
-
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
@@ -348,6 +349,19 @@ group.add_argument('--use-multi-epochs-loader', action='store_true', default=Fal
 group.add_argument('--log-wandb', action='store_true', default=False,
                    help='log training and validation metrics to wandb')
 
+import numpy as np
+import random
+
+
+def set_seed(seed=42):
+    torch.manual_seed(seed)  # 为CPU设置随机种子
+    torch.cuda.manual_seed(seed)  # 为当前GPU设置随机种子
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU，为所有GPU设置随机种子
+    np.random.seed(seed)  # Numpy module.
+    random.seed(seed)  # Python random module.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -370,9 +384,10 @@ def main():
     utils.setup_default_logging()
     args, args_text = _parse_args()
 
-    if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
+    # if torch.cuda.is_available():
+    #     torch.backends.cuda.matmul.allow_tf32 = True
+    #     torch.backends.cudnn.benchmark = True
+    set_seed(args.seed)
 
     args.prefetcher = not args.no_prefetcher
     device = utils.init_distributed_device(args)
@@ -616,6 +631,8 @@ def main():
     train_interpolation = args.train_interpolation
     if args.no_aug or not train_interpolation:
         train_interpolation = data_config['interpolation']
+
+    print(data_config['input_size'])
     loader_train = create_loader(
         dataset_train,
         input_size=data_config['input_size'],
@@ -815,6 +832,7 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
+                # best_conf_metric =
 
             if lr_scheduler is not None:
                 # step LR for next epoch
@@ -954,6 +972,14 @@ def train_one_epoch(
     return OrderedDict([('loss', losses_m.avg)])
 
 
+# from torchmetrics.classification import MulticlassF1Score
+# from torchmetrics.classification import MulticlassConfusionMatrix
+# from torchmetrics.classification import MulticlassRecall
+# from torchmetrics.classification import MulticlassPrecision
+from torchmetrics.classification import MulticlassAUROC
+from torchmetrics.classification import MulticlassRecallAtFixedPrecision
+
+
 def validate(
         model,
         loader,
@@ -965,8 +991,22 @@ def validate(
 ):
     batch_time_m = utils.AverageMeter()
     losses_m = utils.AverageMeter()
-    top1_m = utils.AverageMeter()
-    top5_m = utils.AverageMeter()
+    # top1_m = utils.AverageMeter()
+    # top5_m = utils.AverageMeter()
+
+    # c0_f1_m = utils.AverageMeter()
+    # c1_f1_m = utils.AverageMeter()
+    # c2_f1_m = utils.AverageMeter()
+    output_batches = []
+    target_batches = []
+    # mcf1s = MulticlassF1Score(num_classes=args.num_classes, average=None).to(device)
+    # confmat = MulticlassConfusionMatrix(num_classes=args.num_classes).to(device)
+    # mcr = MulticlassRecall(num_classes=args.num_classes, average=None).to(device)
+    # mcp = MulticlassPrecision(num_classes=args.num_classes, average=None).to(device)
+    target_precision = 0.50
+    mc_auroc = MulticlassAUROC(num_classes=args.num_classes, average="macro", thresholds=None)
+    mcrafp = MulticlassRecallAtFixedPrecision(num_classes=args.num_classes, min_precision=target_precision,
+                                              thresholds=None)
 
     model.eval()
 
@@ -993,12 +1033,22 @@ def validate(
                     target = target[0:target.size(0):reduce_factor]
 
                 loss = loss_fn(output, target)
-            acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
+                output_batches.append(output)
+                target_batches.append(target)
+            ##acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
+            # f1_list = mcf1s(output, target)
+            # c0_f1 = f1_list[0]
+            # c1_f1 = f1_list[1]
+            # c2_f1 = f1_list[2]
 
             if args.distributed:
                 reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
-                acc1 = utils.reduce_tensor(acc1, args.world_size)
-                acc5 = utils.reduce_tensor(acc5, args.world_size)
+                # acc1 = utils.reduce_tensor(acc1, args.world_size)
+                # acc5 = utils.reduce_tensor(acc5, args.world_size)
+                # c0_f1 = utils.reduce_tensor(c0_f1, args.world_size)
+                # c1_f1 = utils.reduce_tensor(c1_f1, args.world_size)
+                # c2_f1 = utils.reduce_tensor(c2_f1, args.world_size)
+
             else:
                 reduced_loss = loss.data
 
@@ -1006,27 +1056,92 @@ def validate(
                 torch.cuda.synchronize()
 
             losses_m.update(reduced_loss.item(), input.size(0))
-            top1_m.update(acc1.item(), output.size(0))
-            top5_m.update(acc5.item(), output.size(0))
+            # top1_m.update(acc1.item(), output.size(0))
+            # top5_m.update(acc5.item(), output.size(0))
+            # c0_f1_m.update(c0_f1.item(), output.size(0))
+            # c1_f1_m.update(c1_f1.item(), output.size(0))
+            # c2_f1_m.update(c2_f1.item(), output.size(0))
 
             batch_time_m.update(time.time() - end)
             end = time.time()
             if utils.is_primary(args) and (last_batch or batch_idx % args.log_interval == 0):
                 log_name = 'Test' + log_suffix
+                # _logger.info(
+                #     '{0}: [{1:>4d}/{2}]  '
+                #     'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                #     'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                #     'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+                #     'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                #         log_name, batch_idx, last_idx,
+                #         batch_time=batch_time_m,
+                #         loss=losses_m,
+                #         top1=top1_m,
+                #         top5=top5_m)
+                # )
                 _logger.info(
                     '{0}: [{1:>4d}/{2}]  '
                     'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
                     'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-                    'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                        # 'c0f1: {c0_f1.val:>7.4f} ({c0_f1.avg:>7.4f})  '
+                        # 'c1f1: {c1_f1.val:>7.4f} ({c1_f1.avg:>7.4f})  '
+                        # 'c2f1: {c2_f1.val:>7.4f} ({c2_f1.avg:>7.4f})  '
+                        .format(
                         log_name, batch_idx, last_idx,
                         batch_time=batch_time_m,
                         loss=losses_m,
-                        top1=top1_m,
-                        top5=top5_m)
+                        # c0_f1=c0_f1_m,
+                        # c1_f1=c1_f1_m,
+                        # c2_f1=c2_f1_m,
+                    )
                 )
 
-    metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+    output_all = torch.cat(output_batches, dim=0)
+    target_all = torch.cat(target_batches, dim=0)
+    # precision = mcp(output_all, target_all)[-1]
+    # recall = mcr(output_all, target_all)[-1]
+    auc = mc_auroc(output_all, target_all)
+    recalls, thresholds = mcrafp(output_all, target_all)
+    # f1 = mcf1s(output_all, target_all)[-1]
+    ##cmetrics = confmat(output_all, target_all)
+    ##_logger.info("confusion metirc: {}".format(cmetrics))
+    # metrics = OrderedDict([('loss', losses_m.avg), 
+    #                        ('top1', top1_m.avg), ('top5', top5_m.avg)])
+    # metrics = OrderedDict([('loss', losses_m.avg), 
+    #                        ('c0_f1', c0_f1_m.avg), 
+    #                        ('c1_f1', c1_f1_m.avg),
+    #                        ('c2_f1', c2_f1_m.avg),
+    #                        ])
+
+    # metrics = OrderedDict([('loss', losses_m.avg), 
+    #                        ('c0_f1', f1_list[0].item()), 
+    #                        ('c1_f1', f1_list[1].item()),
+    #                        ('c2_f1', f1_list[2].item()), 
+    #                       ])
+    _logger.info(
+        # 'precision: {precision:>7.4f} '
+        # 'recall: {recall:>7.4f} '
+        # 'f1: {f1:>7.4f} '
+        'auc: {auc:>2.5f} '
+        'recall@presion={target_precision}:{recall:>2.5f} '
+        'threshold@presion={target_precision}:{threshold:>2.5f} '
+            .format(
+            # precision=precision,
+            # recall=recall,
+            # f1=f1,
+            target_precision=target_precision,
+            auc=auc,
+            recall=recalls[-1],
+            threshold=thresholds[-1]
+        )
+    )
+
+    metrics = OrderedDict([('loss', losses_m.avg),
+                           #    ('recall', recall.item()),
+                           #    ('precision', precision.item()),
+                           #    ('f1', f1.item()),
+                           ('auc', auc.item()),
+                           ('recall', recalls[-1].item()),
+                           ])
 
     return metrics
 
