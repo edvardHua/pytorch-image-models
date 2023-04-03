@@ -287,6 +287,8 @@ def create_loader(
         worker_init_fn=partial(_worker_init, worker_seeding=worker_seeding),
         persistent_workers=persistent_workers
     )
+    from pprint import pprint
+    pprint(loader_args)
     try:
         loader = loader_class(dataset, **loader_args)
     except TypeError as e:

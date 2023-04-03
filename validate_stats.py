@@ -13,6 +13,7 @@ import glob
 import json
 import logging
 import os
+import cv2
 import time
 from collections import OrderedDict
 from contextlib import suppress
@@ -22,6 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.parallel
 
+from PIL import Image
 from timm.data import create_dataset, create_loader, resolve_data_config, RealLabelsImagenet
 from timm.layers import apply_test_time_pool, set_fast_norm
 from timm.models import create_model, load_checkpoint, is_model, list_models
@@ -156,6 +158,7 @@ parser.add_argument('--valid-labels', default='', type=str, metavar='FILENAME',
                     help='Valid label indices txt file for validation of partial label space')
 parser.add_argument('--retry', default=False, action='store_true',
                     help='Enable batch size decay & retry for single model validation')
+parser.add_argument("--out_img_file", default="", type=str, help="Output image with score")
 
 
 def calc_prcision_recall(gt, pred, cls_id):
@@ -306,11 +309,6 @@ def validate(args):
     else:
         valid_labels = None
 
-    if args.real_labels:
-        real_labels = RealLabelsImagenet(dataset.filenames(basename=True), real_json=args.real_labels)
-    else:
-        real_labels = None
-
     crop_pct = 1.0 if test_time_pool else data_config['crop_pct']
     loader = create_loader(
         dataset,
@@ -329,12 +327,12 @@ def validate(args):
     )
 
     batch_time = AverageMeter()
-    losses = AverageMeter()
 
     model.eval()
 
     output_batches = []
     target_batches = []
+    image_path_batches = []
 
     with torch.no_grad():
         # warmup, reduce variability of first batch time, especially for comparing torchscript vs non
@@ -363,9 +361,6 @@ def validate(args):
                 output_batches.append(output)
                 target_batches.append(target)
 
-            if real_labels is not None:
-                real_labels.add_result(output)
-
             # measure accuracy and record loss
             # acc1, acc5 = accuracy(output.detach(), target, topk=(1, 5))
             # losses.update(loss.item(), input.size(0))
@@ -379,25 +374,22 @@ def validate(args):
     output_all = torch.cat(output_batches, dim=0)
     output_all = torch.nn.functional.softmax(output_all, dim=-1)
     target_all = torch.cat(target_batches, dim=0)
+    # 默认不 shuffle，那么也就是按顺序获取对于文件名
+    image_path_batches = [dataset.filename(index) for index in range(len(dataset))]
 
-    # threshold = 0.10
-    # pred = output_all.detach().numpy()
-    # gt = target_all.detach().numpy()
-    #
-    # pred_filter = []
-    # postive_value = []
-    # for ind, val in enumerate(pred):
-    #     if val[1] >= threshold:
-    #         pred_filter.append(1)
-    #     else:
-    #         pred_filter.append(0)
-    #
-    #     if gt[ind] == 1:
-    #         postive_value.append(val[1])
-    #
-    # m = calc_prcision_recall(gt, pred_filter, 1)
-    # print(m)
-    # print(list(sorted(postive_value)))
+    threshold = 0.10
+    pred = output_all.detach().numpy()
+    gt = target_all.detach().numpy()
+
+    if args.out_img_file:
+        os.makedirs(args.out_img_file, exist_ok=True)
+
+        for score, gt, ori_fn in zip(pred, gt, image_path_batches):
+            score = ["%.3f" % s for s in score]
+            score = "_".join(score)
+            new_fn = "%d_%s_%s" % (gt, score, os.path.basename(ori_fn))
+            image = cv2.imread(os.path.join(args.data_dir, ori_fn))
+            cv2.imwrite(os.path.join(args.out_img_file, new_fn), image)
 
     mcrafp = MulticlassRecallAtFixedPrecision(num_classes=args.num_classes, min_precision=0.1, thresholds=None)
 
