@@ -332,7 +332,6 @@ def validate(args):
 
     output_batches = []
     target_batches = []
-    image_path_batches = []
 
     with torch.no_grad():
         # warmup, reduce variability of first batch time, especially for comparing torchscript vs non
@@ -377,7 +376,6 @@ def validate(args):
     # 默认不 shuffle，那么也就是按顺序获取对于文件名
     image_path_batches = [dataset.filename(index) for index in range(len(dataset))]
 
-    threshold = 0.10
     pred = output_all.detach().numpy()
     gt = target_all.detach().numpy()
 
@@ -391,7 +389,7 @@ def validate(args):
             image = cv2.imread(os.path.join(args.data_dir, ori_fn))
             cv2.imwrite(os.path.join(args.out_img_file, new_fn), image)
 
-    mcrafp = MulticlassRecallAtFixedPrecision(num_classes=args.num_classes, min_precision=0.1, thresholds=None)
+    mcrafp = MulticlassRecallAtFixedPrecision(num_classes=args.num_classes, min_precision=0.7, thresholds=None)
 
     recalls, thresholds = mcrafp(output_all, target_all)
     print("mcr recall is:", recalls[-1])
