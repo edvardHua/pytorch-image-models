@@ -14,6 +14,8 @@ NVIDIA CUDA specific speedups adopted from NVIDIA Apex examples
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
+
+from edz_sample_strategy import EDZDSSample
 import argparse
 import logging
 import os
@@ -85,6 +87,8 @@ group = parser.add_argument_group('Dataset parameters')
 # Keep this argument outside the dataset group because it is positional.
 parser.add_argument('data', nargs='?', metavar='DIR', const=None,
                     help='path to dataset (positional is *deprecated*, use --data-dir)')
+parser.add_argument('--edz_sample', action="store_true", default=False, help="Whether to use edz sample strategy")
+parser.add_argument("--sample_strategy", type=str, help="Sample strategy for edz")
 parser.add_argument('--data-dir', metavar='DIR',
                     help='path to dataset (root dir)')
 parser.add_argument('--dataset', metavar='NAME', default='',
@@ -97,7 +101,7 @@ group.add_argument('--dataset-download', action='store_true', default=False,
                    help='Allow download of dataset for torch/ and tfds/ datasets that support it.')
 group.add_argument('--class-map', default='', type=str, metavar='FILENAME',
                    help='path to class to idx mapping file (default: "")')
-
+group.add_argument("--fixed_backbone", default="False", type=str, help="Whether to freeze the backbone")
 # Model parameters
 group = parser.add_argument_group('Model parameters')
 group.add_argument('--model', default='resnet50', type=str, metavar='MODEL',
@@ -389,6 +393,10 @@ def main():
     #     torch.backends.cudnn.benchmark = True
     set_seed(args.seed)
 
+    if args.edz_sample:
+        sam = EDZDSSample(args.data_dir, cls_betw_ratio=[int(_) for _ in args.sample_strategy.split(",")])
+        args.data_dir = sam()
+
     args.prefetcher = not args.no_prefetcher
     device = utils.init_distributed_device(args)
     if args.distributed:
@@ -442,6 +450,16 @@ def main():
         checkpoint_path=args.initial_checkpoint,
         **args.model_kwargs,
     )
+
+    if eval(args.fixed_backbone):
+        print("INFO: Fixed backbone, finetune header only.")
+        for param in model.stem.parameters():
+            param.requires_grad = False
+        for param in model.stages.parameters():
+            param.requires_grad = False
+        for param in model.norm_pre.parameters():
+            param.requires_grad = False
+
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly

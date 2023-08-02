@@ -13,6 +13,6 @@ CUDA_VISIBLE_DEVICES=0 python3 validate_stats.py \
 --input-size 3 320 320 \
 --device "cpu" \
 --model convnext_base.clip_laion2b \
---checkpoint ./output/train/20230329-124013-convnext_base_clip_laion2b-320/model_best.pth.tar
+--checkpoint ./output/train/20230410-100227-convnext_base_clip_laion2b-320/model_best.pth.tar
 
 

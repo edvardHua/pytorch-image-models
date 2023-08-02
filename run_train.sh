@@ -64,7 +64,7 @@
 ## --model convnext_base.clip_laion2b
 
 CUDA_VISIBLE_DEVICES=1 python3 train_edz.py \
---data-dir /home/zihua/data_warehouse/low_quality/al_sampler_0531_edz \
+--data-dir /home/zihua/data_warehouse/low_quality/ablight_screened_0719_ds \
 --output /home/zihua/data_warehouse/low_quality/ablight_model \
 --train-split "training" \
 --val-split "validation" \
@@ -85,5 +85,5 @@ CUDA_VISIBLE_DEVICES=1 python3 train_edz.py \
 --use-multi-epochs-loader \
 --checkpoint-hist 5 \
 --eval-metric recall \
---experiment resnet50_al_sampler_0531_edz
+--experiment resnet50_ablight_screened_0719
 

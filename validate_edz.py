@@ -94,6 +94,7 @@ def model_metric(data_path, checkpoint, inpsize, model_name="convnext_base.clip_
         mcrafp = MulticlassRecallAtFixedPrecision(num_classes=num_classes, min_precision=prec, thresholds=None)
 
         recalls, thresholds = mcrafp(output_all, target_all)
+
         # print("mcr recall is:", recalls[-1])
         # print("mcr threshold is:", thresholds[-1])
 
@@ -124,6 +125,9 @@ def model_metric(data_path, checkpoint, inpsize, model_name="convnext_base.clip_
     print("Fixed Precision, Precision, Recall, Threshold")
     for i, j, k, l in zip(precssss, prec_arr, recall_arr, threshold_arr):
         print("%.4f, %.4f, %.4f, %.6f" % (i, j, k, l))
+    
+    from IPython import embed
+    embed()
 
 
 if __name__ == '__main__':
